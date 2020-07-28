@@ -7,7 +7,7 @@ import Listr = require('listr');
 import { join as pathJoin } from 'path';
 import * as rimraf from 'rimraf';
 import { promisify } from 'util';
-import { getPackageVersionsNpm, JovoCliRenderer } from '../utils';
+import { getPackageVersionsNpm, JovoCliRenderer, OutdatedPackages } from '../utils';
 import { ANSWER_UPDATE, promptUpdateVersions } from '../utils/Prompts';
 
 const execAsync = promisify(exec);
@@ -36,14 +36,24 @@ export class Update extends Command {
 
       // ToDo: Outsource to utils.
       const packageVersions = await getPackageVersionsNpm(/^jovo\-/);
-      const outOfDatePackages: string[] = [];
+      const outOfDatePackages: OutdatedPackages[] = [];
 
       if (Object.keys(packageVersions).length > 0) {
         this.log('Jovo packages of current project:');
         for (const [name, pkg] of Object.entries(packageVersions)) {
-          let text = `  ${name}: ${pkg.local}`;
           if (pkg.local !== pkg.npm) {
-            outOfDatePackages.push(name);
+            outOfDatePackages.push({
+              dev: pkg.dev,
+              inPackageJson: pkg.inPackageJson,
+              name,
+            });
+          }
+          if (!pkg.inPackageJson) {
+            continue;
+          }
+          let text = `  ${name} ${pkg.dev ? '(dev)' : ''}: ${pkg.local}`;
+
+          if (pkg.local !== pkg.npm) {
             text += chalk.grey(`  -> ${pkg.npm}`);
           }
           this.log(text);
@@ -55,7 +65,9 @@ export class Update extends Command {
         return;
       }
 
-      const { update } = await promptUpdateVersions(outOfDatePackages.length);
+      const { update } = await promptUpdateVersions(
+        outOfDatePackages.filter((pkg: OutdatedPackages) => pkg.inPackageJson).length,
+      );
       if (update !== ANSWER_UPDATE) {
         return;
       }
@@ -63,13 +75,50 @@ export class Update extends Command {
       let npmUpdateOutput = '';
 
       for (let i = 0; i < outOfDatePackages.length; i++) {
-        outOfDatePackages[i] = outOfDatePackages[i] + '@latest';
+        outOfDatePackages[i].name = outOfDatePackages[i].name + '@latest';
       }
 
       tasks.add({
         title: 'Updating Jovo packages...',
         task: async () => {
-          const updateCommand = `npm install ${outOfDatePackages.join(' ')} --loglevel=error`;
+          const prodPkgsSave = outOfDatePackages
+            .filter((pkg: OutdatedPackages) => !pkg.dev && pkg.inPackageJson)
+            .map((pkg: OutdatedPackages) => pkg.name);
+
+          const prodPkgsNoSave = outOfDatePackages
+            .filter((pkg: OutdatedPackages) => !pkg.dev && !pkg.inPackageJson)
+            .map((pkg: OutdatedPackages) => pkg.name);
+
+          const devPkgsSave = outOfDatePackages
+            .filter((pkg: OutdatedPackages) => pkg.dev && pkg.inPackageJson)
+            .map((pkg: OutdatedPackages) => pkg.name);
+
+          const devPkgsNoSave = outOfDatePackages
+            .filter((pkg: OutdatedPackages) => !pkg.dev && !pkg.inPackageJson)
+            .map((pkg: OutdatedPackages) => pkg.name);
+
+          const updateCommands: string[] = [];
+
+          if (prodPkgsSave.length > 0) {
+            updateCommands.push(`npm install ${prodPkgsSave.join(' ')} --loglevel=error`);
+          }
+
+          if (prodPkgsSave.length > 0) {
+            updateCommands.push(
+              `npm install ${prodPkgsNoSave.join(' ')} --no-save --loglevel=error`,
+            );
+          }
+
+          if (devPkgsSave.length > 0) {
+            updateCommands.push(`npm install ${devPkgsSave.join(' ')} --save-dev --loglevel=error`);
+          }
+          if (devPkgsNoSave.length > 0) {
+            updateCommands.push(
+              `npm install ${devPkgsNoSave.join(' ')} --no-save --loglevel=error`,
+            );
+          }
+
+          const updateCommand = updateCommands.join('&&');
 
           try {
             const { stdout, stderr } = await execAsync(updateCommand, {

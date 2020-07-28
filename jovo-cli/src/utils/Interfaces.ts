@@ -11,14 +11,26 @@ export interface ListrTaskHelper {
 }
 
 export interface PackageVersions {
-  [key: string]: string;
+  [key: string]: {
+    dev: boolean;
+    inPackageJson: boolean;
+    version: string;
+  };
 }
 
 export interface PackageVersionsNpm {
   [key: string]: {
     local: string;
+    dev: boolean;
     npm: string;
+    inPackageJson: boolean;
   };
+}
+
+export interface OutdatedPackages {
+  name: string;
+  dev: boolean;
+  inPackageJson: boolean;
 }
 
 export interface IScaffoldParameters {
